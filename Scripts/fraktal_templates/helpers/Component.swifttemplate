@@ -1,0 +1,286 @@
+<%- include("Keys") -%>
+<%_
+enum ParseError : Error {
+    case noComponents
+}
+
+indirect enum Component {
+    case standart(String)
+    case custom(String)
+    case closure(String)
+    case enumeration(String)
+    case enumerationV2(String)
+    case array(of: Component)
+    case optional(of: Component)
+    case serial(Component)
+    
+    init?(_ value: String) {
+        try? self.init(value.components(separatedBy: .whitespaces))
+    }
+    
+    init(_ components: [String]) throws {
+        let (annotation, rest) = try Component.parse(components)
+
+        switch annotation {
+        case "*": self = .serial(try Component(rest))
+        case "?": self = .optional(of: try Component(rest))
+        case "[]": self = .array(of: try Component(rest))
+        default: self = Component(typeName: components.joined(separator: " "))
+        }
+    }
+    
+    init(typeName: String) {
+        if let customName = Component.drop(prefix: "@", in: typeName) {
+            self = .custom(customName)
+        } else if let enumName = Component.drop(prefix: "#", in: typeName) {
+            self = .enumeration(enumName)
+        } else if let enumName = Component.drop(prefix: "$", in: typeName) {
+            self = .enumerationV2(enumName)
+        } else if typeName.contains("->") {
+            self = .closure(typeName)
+        } else {
+            self = .standart(typeName)
+        }
+    }
+    
+    init(typeName: TypeName) {
+        if let array = typeName.array {
+            self = .array(of: Component(typeName: array.elementTypeName))
+        } else if typeName.isOptional || typeName.isImplicitlyUnwrappedOptional {
+            self = .optional(of: Component(typeName: typeName.unwrappedTypeName))
+        } else if let closure = typeName.closure {
+            self = .closure(closure.name)
+        } else {
+            self = .standart(typeName.unwrappedTypeName)
+        }
+    }
+
+    init?(presentableType: Type) {
+    	guard 
+        	presentableType.implements[Key.Presentable.protocol] != nil || 
+            presentableType.inheritedTypes.contains(Key.Presentable.protocol) ||
+	        presentableType.annotations[Key.Presentable.generate] != nil
+    	else { return nil }
+    	self = .custom(presentableType.name)
+    }
+    
+    static func parse(_ components: [String]) throws -> (String, [String]) {
+        guard !components.isEmpty, let first = components.first else { throw ParseError.noComponents }
+        return (first, Array(components.dropFirst()))
+    }
+    
+    static func drop(prefix: String, in string: String) -> String? {
+        guard string.hasPrefix(prefix) else { return nil }
+        return String(string.characters.dropFirst(prefix.characters.count))
+    }
+    
+    static func drop(suffix: String, in string: String) -> String? {
+        guard string.hasSuffix(suffix) else { return nil }
+        return String(string.characters.dropLast(suffix.characters.count))
+    }
+    
+    func reduce<T>(
+        onStandart: @escaping (String) -> T,
+        onCustom  : @escaping (String) -> T,
+        onClosure : @escaping (String) -> T,
+        onEnum    : @escaping (String) -> T,
+        onEnumV2  : @escaping (String) -> T,
+        onArray   : @escaping (Component) -> T,
+        onOptional: @escaping (Component) -> T,
+        onSerial  : @escaping (Component) -> T
+    ) -> T {
+        switch self {
+        case .standart(let name): return onStandart(name)
+        case .custom(let name): return onCustom(name)
+        case .closure(let name): return onClosure(name)
+        case .enumeration(let name): return onEnum(name)
+        case .enumerationV2(let name): return onEnumV2(name)
+        case .array(let inner): return onArray(inner)
+        case .optional(let inner): return onOptional(inner)
+        case .serial(let inner): return onSerial(inner)
+        }
+    }
+    
+    func typeName(
+        onStandart: @escaping (String) -> String = { $0 },
+        onCustom:   @escaping (String) -> String = { $0 },
+        onClosure:  @escaping (String) -> String = { $0 },
+        onEnum:     @escaping (String) -> String = { $0 },
+        onEnumV2:   @escaping (String) -> String = { $0 },
+        onArray:    @escaping (String) -> String = { "[\($0)]" },
+        onOptional: @escaping (String) -> String = { "\($0)?" },
+        onSerial:   @escaping (String) -> String = { $0 }
+    ) -> String {
+        let innertypeName: (Component) -> String = {
+            $0.typeName(
+            	onStandart: onStandart, 
+            	onCustom: onCustom, 
+            	onClosure: onClosure, 
+            	onEnum: onEnum, 
+            	onEnumV2: onEnumV2, 
+            	onArray: onArray, 
+            	onOptional: onOptional, 
+            	onSerial: onSerial
+            )
+        }
+
+        return reduce(
+            onStandart: onStandart,
+            onCustom: onCustom,
+            onClosure: onClosure,
+            onEnum: onEnum,
+            onEnumV2: onEnumV2,
+            onArray: 	{ onArray(innertypeName($0)) },
+            onOptional: { onOptional(innertypeName($0)) },
+            onSerial: 	{ onSerial(innertypeName($0)) }
+        )
+    }
+    
+    var presenterType: String {
+        return typeName(
+            onCustom:   { "AnyPresentable<\($0)Presenters>" },
+            onEnum:   	{ "\($0).AnyPresentable" },
+            onEnumV2:   { "\($0)AnyPresentable" }
+        )
+    }
+    
+    func anyPresentableMap(on value: String, needTypeCast: Bool = false) -> String? {
+        if case .serial(.custom) = self, !needTypeCast { return value }
+        return reduce(
+            onStandart: { _ in nil },
+            onCustom:   { _ in needTypeCast ? "\(self.presenterType)(\(value))" : value },
+            onClosure:  { _ in nil },
+            onEnum:     { _ in "\(self.presenterType)(\(value))" },
+            onEnumV2:   { _ in "\(self.presenterType)(\(value))" },
+            onArray:    { $0.anyPresentableMap(on: "$0", needTypeCast: true).map { "\(value).map { \($0) }" } },
+            onOptional: { $0.anyPresentableMap(on: "$0", needTypeCast: true).map { "\(value).map { \($0) }" } },
+            onSerial:   { $0.anyPresentableMap(on: "$0", needTypeCast: true).map { "\(value).producer.map { \($0) }" } }
+        )
+    }
+    
+    var mockValueType: String {
+        if case let .closure(name) = self { return "@escaping \(name)" }
+        return mockType
+    }
+
+    var mockType: String {
+        return typeName(
+            onCustom:   { "\($0)MockPresentable" },
+            onEnum:   	{ "\($0).MockPresentable" },
+            onEnumV2:   { "\($0)MockPresentable" }
+        )
+    }
+
+    func mockPresentableMap(on value: String) -> String? {
+        return reduce(
+            onStandart: { _ in nil },
+            onCustom:   { _ in "\(self.presenterType)(\(value))" },
+            onClosure:  { _ in nil },
+            onEnum:     { _ in "\(self.presenterType)(\(value))" },
+            onEnumV2:   { _ in "\(self.presenterType)(\(value))" },
+            onArray:    { $0.mockPresentableMap(on: "$0").map { "\(value).map { \($0) }" } },
+            onOptional: { $0.mockPresentableMap(on: "$0").map { "\(value).map { \($0) }" } },
+            onSerial:   { $0.mockPresentableMap(on: "$0") }
+        )
+    }
+
+    var testViewType: String {
+        return typeName(
+        	onCustom:   { "\($0).TestView" }, 
+        	onEnum:     { "\($0).TestView" }, 
+        	onEnumV2:   { "\($0).TestView" }, 
+        	onArray:    { $0 }, 
+        	onOptional: { $0 }
+        )
+    }
+    
+    var testViewTypeAnnotations: String {
+        return reduce(
+            onStandart: { _ in "" },
+            onCustom:   { _ in "" },
+            onClosure:  { _ in "" },
+            onEnum:     { _ in "" },
+            onEnumV2:   { _ in "" },
+            onArray:    { "\($0.testViewTypeAnnotations).Array" },
+            onOptional: { "\($0.testViewTypeAnnotations).Optional" },
+            onSerial:   { $0.testViewTypeAnnotations }
+        )
+    }
+    
+    func testViewHelperType(isTopLevel: Bool = true) -> String {
+        return reduce(
+            onStandart: { $0 },
+            onCustom:   { "\($0).TestView" },
+            onClosure:  { isTopLevel ? "(\($0))" : $0 },
+            onEnum:     { "\($0).TestView" },
+            onEnumV2:   { "\($0).TestView" },
+            onArray:    { "[\($0.testViewHelperType(isTopLevel: false))]" },
+            onOptional: { "\($0.testViewHelperType(isTopLevel: false))\(isTopLevel ? "" : "?")" },
+            onSerial:   { $0.testViewHelperType(isTopLevel: isTopLevel) }
+        )
+    }
+    
+    func testViewHelperTypeMap(on value: String) -> String {
+        return reduce(
+            onStandart: { _ in "\(value).value" },
+            onCustom:   { _ in Component.drop(suffix: "?", in: value) ?? value },
+            onClosure:  { _ in "\(value).value" },
+            onEnum:     { _ in Component.drop(suffix: "?", in: value) ?? value },
+            onEnumV2:   { _ in Component.drop(suffix: "?", in: value) ?? value },
+            onArray:    { "\(value).views.map { \($0.testViewHelperTypeMap(on: "$0")) }" },
+            onOptional: { $0.testViewHelperTypeMap(on: "\(value).view?") },
+            onSerial:   { $0.testViewHelperTypeMap(on: value) }
+        )
+    }
+
+    func enumTestViewMap(on value: String) -> String? {
+        return reduce(
+            onStandart: { _ in nil },
+            onCustom:   { _ in self.testViewHelperType() + "(\(value))" },
+            onClosure:  { _ in nil },
+            onEnum:     { _ in self.testViewHelperType() + "(\(value))" },
+            onEnumV2:   { _ in self.testViewHelperType() + "(\(value))" },
+            onArray:    { $0.enumTestViewMap(on: "$0").map { "\(value).map { \($0) }" } },
+            onOptional: { $0.enumTestViewMap(on: "$0").map { "\(value).map { \($0) }" } },
+            onSerial:   { $0.enumTestViewMap(on: "$0").map { "\(value).producer.map { \($0) }" } }
+        )
+    }
+    
+    func enumDisposableMap(on value: String) -> String? {
+        return reduce(
+            onStandart: { _ in nil },
+            onCustom:   { _ in "\(value).disposable" },
+            onClosure:  { _ in nil },
+            onEnum:     { _ in "\(value).disposable" },
+            onEnumV2:   { _ in "\(value).disposable" },
+            onArray:    { $0.enumDisposableMap(on: "$0").map { "ScopedDisposable(CompositeDisposable(\(value).map { \($0) }))" } },
+            onOptional: { $0.enumDisposableMap(on: "$0").map { "\(value).flatMap { \($0) }" } },
+            onSerial:   { _ in nil }
+        )
+    }
+
+    var testPresenterType: String {
+        let base = isStandart ? "AnyTestView<\(testViewType)>" : testViewType
+        return base + testViewTypeAnnotations + ".View"
+    }
+    
+    var isSerial: Bool {
+        switch self {
+        case .standart, .custom, .closure, .array, .optional, .enumeration, .enumerationV2: return false
+        case .serial: return true
+        }
+    }
+    
+    var isCustom: Bool {
+        return !isStandart
+    }
+    
+    var isStandart: Bool {
+        switch self {
+        case .standart, .closure: return true
+        case .custom, .enumeration, .enumerationV2: return false
+        case .array(let inner), .optional(let inner), .serial(let inner): return inner.isStandart
+        }
+    }
+}
+-%>

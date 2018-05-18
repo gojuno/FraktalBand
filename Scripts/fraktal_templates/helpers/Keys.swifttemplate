@@ -1,0 +1,23 @@
+<%_
+enum Key {
+    enum Args {
+        static let `import` = "import"
+        static let testableImport = "testableImport"
+    }
+    enum Presentable {
+        static let generate = "presentable"
+        static let `protocol` = "Presentable"
+        static let accessLevel = "access_level"
+    }
+    enum Presenter {
+        static let name = "presenter_name"
+    }
+    enum Mock {
+        static let value = "mock_value"
+        static let `default` = "mock_default"
+    }
+    enum DSL {
+        static let type = "type"
+    }
+}
+-%>

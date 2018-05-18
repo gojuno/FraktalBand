@@ -1,0 +1,83 @@
+<%- include("helpers/Helpers") -%>
+// swiftlint:disable line_length file_length
+
+import Foundation
+
+import FraktalSimplified
+<% if let imports = importTargets(forKey: Key.Args.import, in: arguments) { -%>
+<% for target in imports { -%>
+import <%= target %>
+<% } %>
+<% } -%>
+<% if let imports = importTargets(forKey: Key.Args.testableImport, in: arguments) { -%>
+<% for target in imports { -%>
+@testable import <%= target %>
+<% } -%>
+<% } -%>
+<%_ for type in types.all where type.annotations[Key.Presentable.generate] != nil { -%>
+<%_ let fraktal = Fraktal(type: type) -%>
+<%_ if type is Class { -%>
+
+public final class <%= type.name %>MockPresentable: Presentable {
+
+    <%_ for presenter in fraktal.presenters { -%>
+    public let _<%= presenter.name %>: MutableProperty<<%= presenter.mockType %>>
+    <%_ } -%>
+
+    public init(
+        <%_ for (offset, presenter) in fraktal.presenters.enumerated() { -%>
+        <%= presenter.name %>: <%= presenter.mockValueType %> = <%= presenter.mockDefaultValue %><%= (offset == fraktal.presenters.count - 1) ? "" : "," %>
+        <%_ } -%>
+    ) {
+        <%_ for presenter in fraktal.presenters { -%>
+        self._<%= presenter.name %> = MutableProperty(<%= presenter.name %>)
+        <%_ } -%>
+    }
+
+    public var present: (<%= type.name %>Presenters) -> Disposable? {
+        return { [weak self] presenters in
+            guard let sself = self else { return nil }
+            let disposable = CompositeDisposable()
+            <%_ for presenter in fraktal.presenters { -%>
+            disposable += presenters.<%= presenter.name _-%>.present(<%= presenter.mockedMappedProperty(on: "sself._" + presenter.name) %>)
+            <%_ } -%>
+            return disposable
+        }
+    }
+}
+
+public extension <%= type.name %>MockPresentable {
+    <%_ for presenter in fraktal.presenters { -%>
+    var <%= presenter.name %>: <%= presenter.mockType %> {
+        get { return _<%= presenter.name %>.value }
+        set { _<%= presenter.name %>.value = newValue }
+    }
+    <%_ } -%>
+}
+<%_ } else if type is Enum { -%>
+
+public enum <%= type.name %>MockPresentable {
+    <%_ for presenter in fraktal.enumPresenters { -%>
+    case <%= presenter.caseName %><%= presenter.mockCaseType %>
+    <%_ } -%>
+
+    <%_ if let defaultPresenter = defaultMockPresenter(from: fraktal.enumPresenters) { -%>
+    public init() {
+        self = .<%= defaultPresenter.caseName %><%_ if let valuePresenter = defaultPresenter.valuePresenter { -%>(<%= valuePresenter.mockDefaultValue %>)<%_ } %>
+    }
+    <%_ } -%>
+}
+
+public extension <%= type.name %>AnyPresentable {
+
+    init(_ value: <%= type.name %>MockPresentable) {
+        switch value {
+        <%_ for presenter in fraktal.enumPresenters { -%>
+        case .<%= presenter.caseName %><%= presenter.caseValues %>:
+            self = .<%= presenter.caseName %><%= presenter.valuePresenter.map({ "(\($0.presentableMappedProperty(on: $0.variableName, needTypeCast: true)))" }) ?? "" %>
+        <%_ } -%>
+        }
+    }
+}
+<%_ } -%>
+<%_ } -%>

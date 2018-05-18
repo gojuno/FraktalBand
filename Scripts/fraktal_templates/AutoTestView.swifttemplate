@@ -1,0 +1,79 @@
+<%- include("helpers/Helpers") -%>
+// swiftlint:disable line_length file_length
+
+import Foundation
+
+import FraktalSimplified
+import FraktalSimplifiedTestUtils
+
+<% if let imports = importTargets(forKey: Key.Args.import, in: arguments) { -%>
+<% for target in imports { -%>
+import <%= target %>
+<% } %>
+<% } -%>
+<% if let imports = importTargets(forKey: Key.Args.testableImport, in: arguments) { -%>
+<% for target in imports { -%>
+@testable import <%= target %>
+<% } -%>
+<% } -%>
+<%_ for type in types.all where type.annotations[Key.Presentable.generate] != nil { -%>
+<%_ let fraktal = Fraktal(type: type) -%>
+<%_ if type is Class { -%>
+
+<%= fraktal.accessLevel %> extension <%= type.name %> {
+
+    <%= fraktal.accessLevel %> final class TestView: TestViewType {
+
+        <%_ for presenter in fraktal.presenters { -%>
+        <%= fraktal.presentersAccessLevel %> let _<%= presenter.name %> = <%= presenter.testType %>()
+        <%_ } -%>
+
+        <%= fraktal.accessLevel %> let disposable: ScopedDisposable<AnyDisposable>?
+
+        <%= fraktal.accessLevel %> init(_ presentable: AnyPresentable<<%= type.name %>Presenters>) {
+            self.disposable = presentable.present(<%= type.name %>.Presenters(
+                <%_ for (offset, presenter) in fraktal.presenters.enumerated() { -%>
+                <%= presenter.name %>: self._<%= presenter.name %>.presenter<%= (offset != fraktal.presenters.count - 1) ? "," : "" %>
+                <%_ } -%>
+            )).map(ScopedDisposable.init)
+        }
+    }
+}
+
+<%= fraktal.presentersAccessLevel %> extension <%= type.name %>.TestView {
+    <%_ for presenter in fraktal.presenters { -%>
+    var <%= presenter.name %>: <%= presenter.helperType %>! { return <%= presenter.helperMappedProperty %> }
+    <%_ } -%>
+}
+<%_ } else if type is Enum { -%>
+
+<%= fraktal.accessLevel %> extension <%= type.name %> {
+
+    <%= fraktal.accessLevel %> final class TestView: TestViewType {
+
+        <%_ for presenter in fraktal.enumPresenters { -%>
+        <%= fraktal.presentersAccessLevel %> private(set) var <%= presenter.variableName %>: <%= presenter.testViewType %>!
+        <%_ } -%>
+
+        <%= fraktal.accessLevel %> private(set) var disposable: ScopedDisposable?
+
+        <%= fraktal.accessLevel %> init(_ value: <%= type.name %>AnyPresentable) {
+            switch value {
+            <%_ for presenter in fraktal.enumPresenters { -%>
+            case .<%= presenter.caseName %><%= presenter.caseValues %>:
+                <%_ if let valuePresenter = presenter.valuePresenter { -%>
+                let <%= presenter.variableName %> = <%= valuePresenter.enumTestViewMappedProperty(on: valuePresenter.variableName) %>
+                self.<%= presenter.variableName %> = <%= presenter.variableName %>
+                <%_ if let disposable = valuePresenter.enumDisposableMapped(on: "\(presenter.variableName)") { -%>
+                self.disposable = <%= disposable %>
+                <%_ } -%>
+                <%_ } else { -%>
+                self.<%= presenter.variableName %> = Void()
+                <%_ } -%>
+            <%_ } -%>
+            }
+        }
+    }
+}
+<%_ } -%>
+<%_ } -%>

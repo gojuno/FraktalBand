@@ -1,0 +1,21 @@
+<%- include("helpers/Helpers") -%>
+<%_ for type in types.classes where type.annotations[Key.Presentable.generate] != nil { _-%>
+<%_ let fraktal = Fraktal(type: type) _-%><% -%>
+// sourcery:inline:<%= type.name %>.Presentable
+// swiftlint:disable line_length
+extension <%= type.name %>: Presentable {
+
+    <%= fraktal.accessLevel %> var present: (<%= type.name %>Presenters) -> Disposable? {
+        return { [weak self] presenters in
+            guard let sself = self else { return nil }
+            let disposable = CompositeDisposable()
+            <%_ for presenter in fraktal.presenters { -%>
+            disposable += presenters.<%= presenter.name _%>.present(<%= presenter.presentableMappedProperty(on: "sself." + presenter.variableName) %>)
+            <%_ } -%>
+            return disposable
+        }
+    }
+}
+// swiftlint:enable line_length
+// sourcery:end
+<%_ } -%>

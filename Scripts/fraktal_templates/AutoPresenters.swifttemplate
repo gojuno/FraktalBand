@@ -1,0 +1,33 @@
+// swiftlint:disable line_length file_length
+import FraktalSimplified
+<%- include("helpers/Helpers") -%>
+<% if let imports = importTargets(forKey: Key.Args.import, in: arguments) { -%>
+<% for target in imports { -%>
+import <%= target %>
+<% } %>
+<% } -%>
+<% if let imports = importTargets(forKey: Key.Args.testableImport, in: arguments) { -%>
+<% for target in imports { -%>
+@testable import <%= target %>
+<% } -%>
+<% } -%>
+<%_ for type in types.classes where type.annotations[Key.Presentable.generate] != nil { _-%>
+<%_ let fraktal = Fraktal(type: type) _-%>
+
+public struct <%= type.name %>Presenters {
+
+    <%_ for presenter in fraktal.presenters { -%>
+    public let <%= presenter.name %>: Presenter<<%= presenter.type -%>>
+    <%_ } -%>
+
+    public init(
+        <%_ for (offset, presenter) in fraktal.presenters.enumerated() { -%>
+        <%= presenter.name %>: Presenter<<%= presenter.type -%>><%= (offset != fraktal.presenters.count - 1) ? "," : "" %>
+        <%_ } -%>
+    ) {
+        <%_ for presenter in fraktal.presenters { -%>
+        self.<%= presenter.name %> = <%= presenter.name %>
+        <%_ } -%>
+    }
+}
+<%_ } -%>

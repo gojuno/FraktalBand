@@ -1,0 +1,239 @@
+<%- include("Component") -%>
+<%_
+struct Value {
+    let name: String
+    let type: Type?
+    let typeName: TypeName
+    let presenterName: String
+    let annotation: Annotation
+    let component: Component
+
+    struct Annotation {
+        let dsl: String?
+        let mockValue: String?
+        let presenterName: String?
+    }
+
+    init(name: String, type: Type?, typeName: TypeName, presenterName: String, annotation: Annotation) {
+        self.name = name
+        self.type = type
+        self.typeName = typeName
+        self.presenterName = annotation.presenterName ?? presenterName
+        self.annotation = annotation
+        if let component = annotation.dsl.flatMap(Component.init) { 
+            self.component = component
+        }  else if let component = type.flatMap(Component.init(presentableType:)) {
+            self.component = component
+        } else { 
+            self.component = Component(typeName: typeName)
+        }
+    }
+
+    init?(_ variable: Variable) {
+        guard variable.annotations[Key.Presentable.generate] != nil else { return nil }
+
+        self.init(
+            name: variable.name,
+            type: variable.type,
+            typeName: variable.typeName,
+            presenterName: variable.name,
+            annotation: Value.annotation(from: variable.annotations)
+        )
+    }
+
+    static func lowercasedFirstLetter(from: String) -> String {
+        let first = String(from.characters.prefix(1)).lowercased()
+        let other = String(from.characters.dropFirst())
+        return first + other
+    }
+
+    fileprivate static func annotation(from annotations: [String: NSObject]) -> Value.Annotation {
+        return  Annotation(
+            dsl: annotations[Key.DSL.type] as? String,
+            mockValue: annotations[Key.Mock.value] as? String,
+            presenterName: annotations[Key.Presenter.name] as? String
+        )
+    }
+}
+
+struct EnumValue {
+    let name: String
+    let presenterName: String
+    let value: Value?
+    let isDefaultMock: Bool
+
+    init?(_ enumCase: EnumCase) {
+        let name = enumCase.name
+        let presenterName = Value.lowercasedFirstLetter(from: name) + "Presenter"
+        
+        guard enumCase.associatedValues.count <= 1 else { return nil }
+
+        self.value = enumCase.associatedValues.last.map { associated in
+            Value(
+                name: "item",
+                type: associated.type,
+                typeName: associated.typeName,
+                presenterName: presenterName,
+                annotation: Value.annotation(from: enumCase.annotations)
+            )
+        }
+
+        self.name = name
+        self.presenterName = presenterName
+        self.isDefaultMock = enumCase.annotations[Key.Mock.default] != nil
+    }
+}
+
+struct Presenter {
+
+    let name: String
+
+    let type: String
+    let mockType: String
+    let mockValueType: String
+    let testType: String
+    let testViewType: String
+    let variableName: String
+
+    let mockDefaultValue: String
+    let helperType: String
+    let helperMappedProperty: String
+
+    let isCustom: Bool
+
+    init(value: Value) {
+        self.name = value.presenterName
+        
+        self.type = value.component.presenterType
+        self.mockType = value.component.mockType
+        self.mockValueType = value.component.mockValueType
+        self.testType = value.component.testPresenterType
+        self.testViewType = value.component.testViewType
+
+        self.variableName = value.name
+
+        self.mockDefaultValue = (value.annotation.mockValue) ?? Presenter.mockValue(for: value.component)
+        self.helperType = value.component.testViewHelperType()
+        self.helperMappedProperty = value.component.testViewHelperTypeMap(on: "_\(name).last?")
+
+        self.isCustom = value.component.isCustom
+
+        self.value = value
+    }
+
+    func presentableMappedProperty(on property: String, needTypeCast: Bool = false) -> String {
+        guard let mapped = value.component.anyPresentableMap(on: property, needTypeCast: needTypeCast) else { return property }
+        return mapped
+    }
+
+    func mockedMappedProperty(on property: String) -> String {
+        guard let mappedName = value.component.mockPresentableMap(on: "$0") else { return property }
+        return "\(property).producer.map { \(mappedName) }" 
+    }
+
+    func enumTestViewMappedProperty(on property: String) -> String {
+        guard let mapped = value.component.enumTestViewMap(on: property) else { return property }
+        return mapped
+    }
+
+    func enumDisposableMapped(on property: String) -> String? {
+        return value.component.enumDisposableMap(on: property)
+    }
+
+    private static func mockValue(for component: Component) -> String {
+        switch component {
+        case let .standart(type): return "\(type).mock()"
+        case let .custom(type): return "\(type)MockPresentable()"
+        case .closure: return "{ _ in }"
+        case let .enumeration(type): return "\(type).MockPresentable()"
+        case let .enumerationV2(type): return "\(type)MockPresentable()"
+        case .array: return "[]"
+        case .optional: return "nil"
+        case let .serial(inner): return mockValue(for: inner)
+        }
+    }
+
+    private let value: Value
+}
+
+struct EnumPresenter {
+
+    let name: String
+    let caseName: String
+    let valuePresenter: Presenter?
+    var hasValues: Bool { return valuePresenter != nil }
+    var variableName: String { return Value.lowercasedFirstLetter(from: caseName) }
+    let isDefaultMock: Bool
+
+    var caseValues: String {
+        guard let variableName = valuePresenter?.variableName else { return "" }
+        return "(let \(variableName))"
+    }
+    var caseType: String {
+        guard let type = valuePresenter?.type else { return "" }
+        return "(\(type))"
+    }
+    var mockCaseType: String {
+        guard let type = valuePresenter?.mockType else { return "" }
+        return "(\(type))"
+    }
+    var testViewType: String { return valuePresenter?.helperType ?? "Void" }
+    var testType: String { return valuePresenter?.testType ?? "AnyTestView<Void>.View" }
+
+    init(value: EnumValue) {
+        self.name = value.presenterName
+        self.caseName = value.name
+        self.valuePresenter = value.value.map(Presenter.init)
+        self.isDefaultMock = value.isDefaultMock
+    }
+}
+
+struct Fraktal {
+
+    let presenters: [Presenter]
+    let enumPresenters: [EnumPresenter]
+    let accessLevel: String
+    let presentersAccessLevel: String
+
+    init(type: Type) {
+        
+        let accessLevel: String
+        switch type.accessLevel {
+        case "private": accessLevel = "fileprivate"
+        case "open": accessLevel = "public"
+        default: accessLevel = type.accessLevel
+        }
+
+        self.accessLevel = accessLevel
+        self.presentersAccessLevel = (type.annotations[Key.Presentable.accessLevel] as? String) ?? accessLevel
+
+        let presentableVariables = type.variables.flatMap(Value.init)
+        self.presenters = presentableVariables.map(Presenter.init)
+
+        let presentableCases = (type as? Enum)?.cases.flatMap(EnumValue.init) ?? []
+        self.enumPresenters = presentableCases.map(EnumPresenter.init)
+    }
+}
+
+func importTargets(forKey key: String, in args: [String: NSObject]) -> [String]? {
+    guard let imports = args[key] else { return nil }
+    switch imports {
+        case let single as String: return [single]
+        case let array as [String]: return array
+        default: return nil
+    }
+}
+
+func enumPresenterName(for type: Type) -> String {
+    guard let className = type.name.components(separatedBy: ".").last else { return type.name }
+    return Value.lowercasedFirstLetter(from: className) + "Presenter"
+}
+
+func defaultMockPresenter(from presenters: [EnumPresenter]) -> EnumPresenter? {
+    if let marked = presenters.first(where: { $0.isDefaultMock }) {
+        return marked
+    } else {
+        return presenters.first
+    }
+}
+-%>

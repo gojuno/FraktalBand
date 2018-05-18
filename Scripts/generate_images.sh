@@ -1,0 +1,1 @@
+thirdparty/swiftgen/bin/swiftgen xcassets FraktalBandUI/Resources/Assets.xcassets -t swift4 -o FraktalBandUI/Resources/Images.swift
